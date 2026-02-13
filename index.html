@@ -691,114 +691,54 @@
       }
       
       buildModel() {
-        // Board
-        const boardGeometry = new THREE.BoxGeometry(1.4, 0.08, 0.6);
-        const boardMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0xffffff,
-          roughness: 0.3,
-          metalness: 0.1,
+        const carbonMat = new THREE.MeshStandardMaterial({
+          color: 0x111111, roughness: 0.2, metalness: 0.5
         });
-        const board = new THREE.Mesh(boardGeometry, boardMaterial);
-        board.position.y = 0.3;
+        const boardMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff, roughness: 0.4
+        });
+
+        // 1. THE BOARD
+        const boardLength = 1.1;
+        const board = new THREE.Mesh(new THREE.BoxGeometry(boardLength, 0.08, 0.6), boardMat);
+        const boardOffset = boardLength / 6;
+        board.position.set(boardOffset, 0.85, 0);
         this.group.add(board);
-        
-        // Accent stripe on board
-        const stripeGeometry = new THREE.BoxGeometry(1.3, 0.09, 0.15);
-        const stripeMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0x00ff88,
-          roughness: 0.2,
-          metalness: 0.3,
-        });
-        const stripe = new THREE.Mesh(stripeGeometry, stripeMaterial);
-        stripe.position.y = 0.3;
-        this.group.add(stripe);
-        
-        // Mast
-        const mastGeometry = new THREE.BoxGeometry(0.02, 0.75, 0.12);
-        const mastMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0x333333,
-          roughness: 0.5,
-          metalness: 0.8,
-        });
-        const mast = new THREE.Mesh(mastGeometry, mastMaterial);
-        mast.position.y = -0.075;
-        mast.position.z = -0.1;
+
+        // 2. THE MAST
+        const mast = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.85, 0.18), carbonMat);
+        mast.position.set(0, 0.4, 0);
+        mast.rotation.y = Math.PI / 2;
         this.group.add(mast);
-        
-        // Front wing (main foil)
-        const wingShape = new THREE.Shape();
-        wingShape.moveTo(0, 0);
-        wingShape.lineTo(0.8, 0);
-        wingShape.lineTo(0.7, -0.15);
-        wingShape.lineTo(0.1, -0.12);
-        wingShape.lineTo(0, 0);
-        
-        const extrudeSettings = {
-          depth: 0.03,
-          bevelEnabled: true,
-          bevelThickness: 0.005,
-          bevelSize: 0.005,
-          bevelSegments: 2
-        };
-        
-        const wingGeometry = new THREE.ExtrudeGeometry(wingShape, extrudeSettings);
-        const wing = new THREE.Mesh(wingGeometry, mastMaterial);
-        wing.position.y = -0.45;
-        wing.position.z = 0;
-        wing.position.x = -0.4;
-        wing.rotation.y = Math.PI / 2;
-        this.group.add(wing);
-        
-        // Mirror wing
-        const wingLeft = wing.clone();
-        wingLeft.position.x = 0.4;
-        wingLeft.rotation.y = -Math.PI / 2;
-        wingLeft.scale.x = -1;
-        this.group.add(wingLeft);
-        
-        // Rear stabilizer
-        const stabShape = new THREE.Shape();
-        stabShape.moveTo(0, 0);
-        stabShape.lineTo(0.4, 0);
-        stabShape.lineTo(0.35, -0.08);
-        stabShape.lineTo(0.05, -0.06);
-        stabShape.lineTo(0, 0);
-        
-        const stabGeometry = new THREE.ExtrudeGeometry(stabShape, extrudeSettings);
-        const stab = new THREE.Mesh(stabGeometry, mastMaterial);
-        stab.position.y = -0.42;
-        stab.position.z = -0.6;
-        stab.position.x = -0.2;
-        stab.rotation.y = Math.PI / 2;
-        this.group.add(stab);
-        
-        // Mirror stab
-        const stabLeft = stab.clone();
-        stabLeft.position.x = 0.2;
-        stabLeft.rotation.y = -Math.PI / 2;
-        stabLeft.scale.x = -1;
-        this.group.add(stabLeft);
-        
-        // Rider
-        const riderGeometry = new THREE.CapsuleGeometry(0.15, 0.6, 8, 16);
-        const riderMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0x222222,
-          roughness: 0.8,
-        });
-        const rider = new THREE.Mesh(riderGeometry, riderMaterial);
-        rider.position.y = 0.9;
-        rider.position.z = 0.1;
+
+        // 3. THE FUSELAGE
+        const fuse = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.05, 0.05), carbonMat);
+        fuse.position.set(-0.125, 0, 0);
+        this.group.add(fuse);
+
+        // 4. FRONT WING
+        const fWing = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.02, 1.1), carbonMat);
+        fWing.position.set(0.25, 0, 0);
+        fWing.scale.set(1, 1, 0.8);
+        this.group.add(fWing);
+
+        // 5. STABILIZER
+        const bWing = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.02, 0.4), carbonMat);
+        bWing.position.set(-0.5, 0, 0);
+        this.group.add(bWing);
+
+        // RIDER
+        const riderMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+        const rider = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, 0.6, 8, 16), riderMat);
+        rider.position.set(boardOffset, 1.55, 0);
         this.group.add(rider);
-        
-        // Head
-        const headGeometry = new THREE.SphereGeometry(0.12, 16, 16);
-        const headMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0xffdbac,
-          roughness: 0.9,
-        });
-        const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 1.4;
-        head.position.z = 0.1;
+
+        // HEAD
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.12, 16, 16),
+          new THREE.MeshStandardMaterial({ color: 0xffdbac, roughness: 0.9 })
+        );
+        head.position.set(boardOffset, 2.05, 0);
         this.group.add(head);
       }
       
