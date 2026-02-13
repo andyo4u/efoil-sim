@@ -292,6 +292,21 @@
       <div class="gauge-value" id="throttle-value">0%</div>
     </div>
     
+    <div id="wave-display" class="hud-panel" style="position:absolute; top:80px; left:20px;">
+      <span style="font-size:12px; opacity:0.7;">WAVE</span><br>
+      <span id="wave-value" style="font-size:24px; font-weight:bold; font-family:'Courier New',monospace;">0.0m</span>
+    </div>
+
+    <!-- Wave Control Panel -->
+    <button id="wave-toggle" style="position:absolute; top:120px; right:20px; z-index:20; pointer-events:auto; background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.2); color:white; padding:8px 14px; border-radius:6px; cursor:pointer; font-size:13px; backdrop-filter:blur(10px);">🌊 Waves</button>
+    <div id="wave-panel" style="display:none; position:absolute; top:155px; right:20px; z-index:20; pointer-events:auto; background:rgba(0,0,0,0.8); border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:16px; backdrop-filter:blur(12px); width:280px; max-height:70vh; overflow-y:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <span style="font-weight:bold; color:#00ccff;">🌊 Wave Controls</span>
+        <button id="wave-add" style="pointer-events:auto; background:#00ccff33; border:1px solid #00ccff55; color:#00ccff; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px;">+ Add Swell</button>
+      </div>
+      <div id="swell-list"></div>
+    </div>
+
     <div id="controls-hint" class="visible">
       <h3>🎮 CONTROLS</h3>
       <p class="desktop-only"><strong>W/S</strong> - Throttle Up/Down</p>
@@ -350,6 +365,97 @@
     };
     
     // =====================================================================
+    // WAVE / SWELL SYSTEM
+    // =====================================================================
+
+    const swells = [
+      { height: 0.3, period: 8, steepness: 0.5, direction: 0, enabled: true },
+      { height: 0.15, period: 5, steepness: 0.3, direction: 45, enabled: true },
+    ];
+
+    function getWaveHeight(x, z, time) {
+      let h = 0;
+      for (const s of swells) {
+        if (!s.enabled) continue;
+        const dirRad = s.direction * Math.PI / 180;
+        const dx = Math.cos(dirRad);
+        const dz = Math.sin(dirRad);
+        const freq = (2 * Math.PI) / s.period;
+        const waveLen = (PHYSICS.GRAVITY * s.period * s.period) / (2 * Math.PI);
+        const k = (2 * Math.PI) / waveLen;
+        const phase = k * (x * dx + z * dz) - freq * time;
+        // Steepness controls how peaked vs sinusoidal (0=sine, 1=very peaked)
+        const base = Math.sin(phase);
+        const peaked = base - s.steepness * 0.3 * Math.sin(2 * phase);
+        h += (s.height / 2) * peaked;
+      }
+      return h;
+    }
+
+    function buildSwellPanel() {
+      const list = document.getElementById('swell-list');
+      list.innerHTML = '';
+      swells.forEach((s, i) => {
+        const div = document.createElement('div');
+        div.style.cssText = 'margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.05); border-radius:6px; border:1px solid rgba(255,255,255,0.1);';
+        div.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="font-size:13px; font-weight:bold; color:#7ec8e3;">Swell ${i + 1}</span>
+            <div>
+              <label style="font-size:11px; cursor:pointer;"><input type="checkbox" ${s.enabled ? 'checked' : ''} data-i="${i}" data-p="enabled" style="cursor:pointer;"> On</label>
+              <button data-del="${i}" style="background:none; border:none; color:#ff6666; cursor:pointer; font-size:14px; margin-left:6px;">✕</button>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+            ${sliderHTML('Height', 'height', i, s.height, 0, 2, 0.05, 'm')}
+            ${sliderHTML('Period', 'period', i, s.period, 2, 20, 0.5, 's')}
+            ${sliderHTML('Steepness', 'steepness', i, s.steepness, 0, 1, 0.05, '')}
+            ${sliderHTML('Direction', 'direction', i, s.direction, 0, 360, 5, '°')}
+          </div>
+        `;
+        list.appendChild(div);
+      });
+      // Wire events
+      list.querySelectorAll('input[type=range]').forEach(el => {
+        el.addEventListener('input', (e) => {
+          const i = +e.target.dataset.i;
+          const p = e.target.dataset.p;
+          swells[i][p] = +e.target.value;
+          e.target.parentElement.querySelector('.sv').textContent = e.target.value + (e.target.dataset.u || '');
+        });
+      });
+      list.querySelectorAll('input[type=checkbox]').forEach(el => {
+        el.addEventListener('change', (e) => {
+          swells[+e.target.dataset.i].enabled = e.target.checked;
+        });
+      });
+      list.querySelectorAll('button[data-del]').forEach(el => {
+        el.addEventListener('click', (e) => {
+          swells.splice(+e.target.dataset.del, 1);
+          buildSwellPanel();
+        });
+      });
+    }
+
+    function sliderHTML(label, prop, i, val, min, max, step, unit) {
+      return `<div style="font-size:11px;">
+        <div style="display:flex; justify-content:space-between; opacity:0.7;"><span>${label}</span><span class="sv">${val}${unit}</span></div>
+        <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-i="${i}" data-p="${prop}" data-u="${unit}" style="width:100%; cursor:pointer; accent-color:#00ccff;">
+      </div>`;
+    }
+
+    // Wire toggle + add buttons after DOM ready
+    document.getElementById('wave-toggle').addEventListener('click', () => {
+      const panel = document.getElementById('wave-panel');
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      if (panel.style.display === 'block') buildSwellPanel();
+    });
+    document.getElementById('wave-add').addEventListener('click', () => {
+      swells.push({ height: 0.2, period: 6, steepness: 0.3, direction: 90, enabled: true });
+      buildSwellPanel();
+    });
+
+    // =====================================================================
     // STATE
     // =====================================================================
     
@@ -366,6 +472,7 @@
       
       speed: 0,
       heightAboveWater: 0,
+      waveHeight: 0,
       angleOfAttack: 0,
       battery: 1.0,
       
@@ -558,10 +665,9 @@
           Math.atan2(state.velocity.y, Math.sqrt(state.velocity.x**2 + state.velocity.z**2)) * 180/Math.PI : 0;
         state.angleOfAttack = state.rotation.pitch - velocityAngle;
         
-        // Height above water (including wave height from water shader)
-        const waveHeight = Math.sin(state.position.x * 0.3 + state.time * 0.8) * 0.1 +
-                          Math.sin(state.position.z * 0.2 + state.time * 0.6) * 0.08;
-        state.heightAboveWater = state.position.y - waveHeight;
+        // Height above water using swell system
+        state.waveHeight = getWaveHeight(state.position.x, state.position.z, state.time);
+        state.heightAboveWater = state.position.y - state.waveHeight;
         
         // Lift (only when foil is submerged)
         let liftForce = new THREE.Vector3();
@@ -919,6 +1025,7 @@
         this.throttleFill = document.getElementById('throttle-fill');
         this.throttleValue = document.getElementById('throttle-value');
         this.stateIndicator = document.getElementById('state-indicator');
+        this.waveValue = document.getElementById('wave-value');
         this.controlsHint = document.getElementById('controls-hint');
         
         // Hide controls hint after 10 seconds
@@ -941,6 +1048,9 @@
         const heightPercent = Math.min(100, Math.max(0, (state.heightAboveWater / 2) * 100));
         this.heightFill.style.height = `${heightPercent}%`;
         this.heightValue.textContent = `${state.heightAboveWater.toFixed(1)}m`;
+        
+        // Wave height
+        this.waveValue.textContent = `${state.waveHeight.toFixed(1)}m`;
         
         // Throttle gauge
         const throttlePercent = state.throttle * 100;
