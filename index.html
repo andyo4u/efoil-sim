@@ -321,11 +321,10 @@
 
   <script type="module">
     // =====================================================================
-    // E-FOIL SIMULATOR - MVP v0.1
+    // E-FOIL SIMULATOR - MVP v0.1 with Gerstner Waves
     // =====================================================================
     
     import * as THREE from 'three';
-    import { Water } from 'three/addons/objects/Water.js';
     import { Sky } from 'three/addons/objects/Sky.js';
     
     // =====================================================================
@@ -365,7 +364,7 @@
     };
     
     // =====================================================================
-    // WAVE / SWELL SYSTEM
+    // WAVE / SWELL SYSTEM - Gerstner Waves
     // =====================================================================
 
     const swells = [
@@ -373,23 +372,41 @@
       { height: 0.15, period: 5, steepness: 0.3, direction: 45, enabled: true },
     ];
 
-    function getWaveHeight(x, z, time) {
-      let h = 0;
+    // Gerstner wave calculation - returns position displacement
+    function getWaveDisplacement(x, z, time) {
+      let dx = 0, dy = 0, dz = 0;
+      
       for (const s of swells) {
         if (!s.enabled) continue;
+        
         const dirRad = s.direction * Math.PI / 180;
-        const dx = Math.cos(dirRad);
-        const dz = Math.sin(dirRad);
-        const freq = (2 * Math.PI) / s.period;
+        const dirX = Math.cos(dirRad);
+        const dirZ = Math.sin(dirRad);
+        
         const waveLen = (PHYSICS.GRAVITY * s.period * s.period) / (2 * Math.PI);
         const k = (2 * Math.PI) / waveLen;
-        const phase = k * (x * dx + z * dz) - freq * time;
-        // Steepness controls how peaked vs sinusoidal (0=sine, 1=very peaked)
-        const base = Math.sin(phase);
-        const peaked = base - s.steepness * 0.3 * Math.sin(2 * phase);
-        h += (s.height / 2) * peaked;
+        const omega = Math.sqrt(PHYSICS.GRAVITY * k);
+        
+        const amplitude = s.height / 2;
+        const steepness = Math.min(s.steepness, 1.0 / (k * amplitude * swells.filter(sw => sw.enabled).length));
+        
+        const phase = k * (x * dirX + z * dirZ) - omega * time;
+        const c = Math.cos(phase);
+        const sn = Math.sin(phase);
+        
+        // Gerstner wave displacement
+        dx -= steepness * amplitude * dirX * c;
+        dy += amplitude * sn;
+        dz -= steepness * amplitude * dirZ * c;
       }
-      return h;
+      
+      return { x: dx, y: dy, z: dz };
+    }
+
+    // Get just the height for physics (what the shader will show)
+    function getWaveHeight(x, z, time) {
+      const disp = getWaveDisplacement(x, z, time);
+      return disp.y;
     }
 
     function buildSwellPanel() {
@@ -665,7 +682,7 @@
           Math.atan2(state.velocity.y, Math.sqrt(state.velocity.x**2 + state.velocity.z**2)) * 180/Math.PI : 0;
         state.angleOfAttack = state.rotation.pitch - velocityAngle;
         
-        // Height above water using swell system
+        // Height above water using Gerstner wave system
         state.waveHeight = getWaveHeight(state.position.x, state.position.z, state.time);
         state.heightAboveWater = state.position.y - state.waveHeight;
         
@@ -858,6 +875,131 @@
     }
     
     // =====================================================================
+    // GERSTNER WAVE SHADER
+    // =====================================================================
+    
+    const vertexShader = `
+      #define MAX_WAVES 8
+      
+      uniform float time;
+      uniform int waveCount;
+      uniform vec4 waveData[MAX_WAVES]; // x=amplitude, y=wavelength, z=speed, w=direction
+      uniform vec3 cameraPosition;
+      
+      varying vec3 vWorldPos;
+      varying vec3 vViewDir;
+      varying float vWaveHeight;
+      varying float vFoam;
+      
+      void main() {
+        vec3 pos = position;
+        vec3 tangent = vec3(1.0, 0.0, 0.0);
+        vec3 binormal = vec3(0.0, 0.0, 1.0);
+        
+        float foam = 0.0;
+        
+        // Apply Gerstner waves
+        for (int i = 0; i < MAX_WAVES; i++) {
+          if (i >= waveCount) break;
+          
+          float amplitude = waveData[i].x;
+          float wavelength = waveData[i].y;
+          float speed = waveData[i].z;
+          float direction = waveData[i].w;
+          
+          float k = 2.0 * 3.14159 / wavelength;
+          float omega = speed * k;
+          
+          vec2 dir = vec2(cos(direction), sin(direction));
+          float phase = k * dot(dir, position.xz) - omega * time;
+          
+          float c = cos(phase);
+          float s = sin(phase);
+          
+          // Gerstner displacement
+          float steepness = 0.6 / (k * amplitude * float(waveCount));
+          pos.x -= steepness * amplitude * dir.x * c;
+          pos.z -= steepness * amplitude * dir.y * c;
+          pos.y += amplitude * s;
+          
+          // Accumulate derivatives for normals
+          float wa = k * amplitude;
+          float kx = k * dir.x;
+          float kz = k * dir.y;
+          
+          tangent.x -= steepness * kx * kx * amplitude * s;
+          tangent.y += kx * amplitude * c;
+          tangent.z -= steepness * kx * kz * amplitude * s;
+          
+          binormal.x -= steepness * kx * kz * amplitude * s;
+          binormal.y += kz * amplitude * c;
+          binormal.z -= steepness * kz * kz * amplitude * s;
+          
+          // Foam where waves converge (simplified)
+          foam += steepness * 0.5;
+        }
+        
+        // Compute normal from tangent and binormal
+        vec3 normal = normalize(cross(binormal, tangent));
+        
+        vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+        vViewDir = normalize(cameraPosition - vWorldPos);
+        vWaveHeight = pos.y;
+        vFoam = clamp(foam * 2.0, 0.0, 1.0);
+        
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `;
+    
+    const fragmentShader = `
+      uniform vec3 sunPosition;
+      uniform vec3 deepColor;
+      uniform vec3 shallowColor;
+      uniform float time;
+      
+      varying vec3 vWorldPos;
+      varying vec3 vViewDir;
+      varying float vWaveHeight;
+      varying float vFoam;
+      
+      void main() {
+        // Recompute normal from derivatives using dFdx/dFdy for accurate per-fragment normals
+        vec3 dPdx = dFdx(vWorldPos);
+        vec3 dPdy = dFdy(vWorldPos);
+        vec3 normal = normalize(cross(dPdx, dPdy));
+        
+        // Fresnel effect
+        float fresnel = pow(1.0 - max(dot(normal, vViewDir), 0.0), 3.0);
+        
+        // Base ocean color with depth
+        float depthFactor = clamp(vWaveHeight * 0.3 + 0.5, 0.0, 1.0);
+        vec3 waterColor = mix(deepColor, shallowColor, depthFactor);
+        
+        // Sun specular
+        vec3 sunDir = normalize(sunPosition);
+        vec3 reflected = reflect(-vViewDir, normal);
+        float specular = pow(max(dot(reflected, sunDir), 0.0), 128.0);
+        vec3 specularColor = vec3(1.0, 1.0, 0.9) * specular * 0.8;
+        
+        // Fresnel blend with sky reflection
+        vec3 skyColor = vec3(0.5, 0.7, 0.9);
+        vec3 finalColor = mix(waterColor, skyColor, fresnel * 0.4);
+        finalColor += specularColor;
+        
+        // Foam on wave crests
+        float foamMask = smoothstep(0.4, 0.8, vWaveHeight + 0.2);
+        foamMask *= vFoam;
+        vec3 foamColor = vec3(1.0, 1.0, 1.0);
+        finalColor = mix(finalColor, foamColor, foamMask * 0.6);
+        
+        // Semi-transparent
+        float alpha = 0.95;
+        
+        gl_FragColor = vec4(finalColor, alpha);
+      }
+    `;
+    
+    // =====================================================================
     // GAME RENDERER
     // =====================================================================
     
@@ -871,7 +1013,7 @@
           10000
         );
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -903,25 +1045,32 @@
       }
       
       setupWater() {
-        const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
+        // Create water mesh with Gerstner waves
+        const waterGeometry = new THREE.PlaneGeometry(200, 200, 256, 256);
         
-        this.water = new Water(waterGeometry, {
-          textureWidth: 512,
-          textureHeight: 512,
-          waterNormals: new THREE.TextureLoader().load(
-            'https://threejs.org/examples/textures/waternormals.jpg',
-            (texture) => {
-              texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-            }
-          ),
-          sunDirection: this.sunPosition ? this.sunPosition.clone().normalize() : new THREE.Vector3(0.7, 0.5, 0.3).normalize(),
-          sunColor: 0xffffff,
-          waterColor: 0x001e0f,
-          distortionScale: 3.7,
-          fog: true,
-          alpha: 1.0,
+        // Prepare wave data for shader
+        this.waveData = [];
+        for (let i = 0; i < 8; i++) {
+          this.waveData.push(new THREE.Vector4(0, 1, 1, 0));
+        }
+        
+        this.waterMaterial = new THREE.ShaderMaterial({
+          uniforms: {
+            time: { value: 0 },
+            waveCount: { value: 0 },
+            waveData: { value: this.waveData },
+            sunPosition: { value: new THREE.Vector3(0.7, 0.5, 0.3).normalize() },
+            deepColor: { value: new THREE.Color(0x001e32) },
+            shallowColor: { value: new THREE.Color(0x0066aa) },
+            cameraPosition: { value: this.camera.position }
+          },
+          vertexShader: vertexShader,
+          fragmentShader: fragmentShader,
+          transparent: true,
+          side: THREE.DoubleSide,
         });
         
+        this.water = new THREE.Mesh(waterGeometry, this.waterMaterial);
         this.water.rotation.x = -Math.PI / 2;
         this.scene.add(this.water);
       }
@@ -938,11 +1087,14 @@
         skyUniforms['mieDirectionalG'].value = 0.8;
         
         // Golden hour sun position
-        const phi = THREE.MathUtils.degToRad(75); // Above horizon enough to light the scene
+        const phi = THREE.MathUtils.degToRad(75);
         const theta = THREE.MathUtils.degToRad(30);
         this.sunPosition = new THREE.Vector3();
         this.sunPosition.setFromSphericalCoords(1, phi, theta);
         skyUniforms['sunPosition'].value.copy(this.sunPosition);
+        
+        // Update water shader sun position
+        this.waterMaterial.uniforms.sunPosition.value.copy(this.sunPosition);
         
         // Fog for horizon blend
         this.scene.fog = new THREE.Fog(0x87ceeb, 100, 2000);
@@ -956,10 +1108,53 @@
       update() {
         this.efoil.update();
         
-        // Animate water
-        if (this.water.material.uniforms['time']) {
-          this.water.material.uniforms['time'].value += 1.0 / 60.0;
+        // Update water shader uniforms
+        this.waterMaterial.uniforms.time.value = state.time;
+        this.waterMaterial.uniforms.cameraPosition.value.copy(this.camera.position);
+        
+        // Update wave data from swells
+        let waveIndex = 0;
+        
+        // Primary swells from UI
+        for (const swell of swells) {
+          if (!swell.enabled || waveIndex >= 8) continue;
+          
+          const amplitude = swell.height / 2;
+          const wavelength = (PHYSICS.GRAVITY * swell.period * swell.period) / (2 * Math.PI);
+          const k = (2 * Math.PI) / wavelength;
+          const omega = Math.sqrt(PHYSICS.GRAVITY * k);
+          const direction = swell.direction * Math.PI / 180;
+          
+          this.waveData[waveIndex].set(amplitude, wavelength, omega / k, direction);
+          waveIndex++;
         }
+        
+        // Add detail waves
+        const detailWaves = [
+          { amp: 0.05, period: 2.5, dir: 80 },
+          { amp: 0.08, period: 3.5, dir: 120 },
+          { amp: 0.04, period: 1.8, dir: 200 },
+          { amp: 0.06, period: 4.2, dir: 310 },
+        ];
+        
+        for (const wave of detailWaves) {
+          if (waveIndex >= 8) break;
+          
+          const amplitude = wave.amp;
+          const wavelength = (PHYSICS.GRAVITY * wave.period * wave.period) / (2 * Math.PI);
+          const k = (2 * Math.PI) / wavelength;
+          const omega = Math.sqrt(PHYSICS.GRAVITY * k);
+          const direction = wave.dir * Math.PI / 180;
+          
+          this.waveData[waveIndex].set(amplitude, wavelength, omega / k, direction);
+          waveIndex++;
+        }
+        
+        this.waterMaterial.uniforms.waveCount.value = waveIndex;
+        
+        // Center water mesh on player position
+        this.water.position.x = state.position.x;
+        this.water.position.z = state.position.z;
       }
       
       render() {
@@ -990,8 +1185,8 @@
         this.freelook = false;
         this.freelookTimer = 0;
         this.freelookTimeout = 20; // seconds
-        this.orbitYaw = 0;   // horizontal angle around board
-        this.orbitPitch = 0; // vertical angle
+        this.orbitYaw = 0;
+        this.orbitPitch = 0;
         this.orbitDist = 3;
         this.dragging = false;
         this.lastMouse = { x: 0, y: 0 };
@@ -1023,8 +1218,7 @@
           this.freelookTimer = 0;
         }, { passive: false });
 
-        // Touch: two-finger or single drag for freelook
-        this.touchFreelook = null;
+        // Touch: two-finger for freelook
         el.addEventListener('touchstart', (e) => {
           if (e.touches.length === 2) {
             e.preventDefault();
@@ -1054,8 +1248,7 @@
 
       enterFreelook() {
         if (!this.freelook) {
-          // Initialize orbit angles from current follow cam direction
-          this.orbitYaw = state.rotation.yaw + Math.PI; // behind the board
+          this.orbitYaw = state.rotation.yaw + Math.PI;
           this.orbitPitch = 0.3;
           this.orbitDist = 3;
         }
@@ -1069,7 +1262,6 @@
         if (this.freelook) {
           this.freelookTimer += dt;
 
-          // Orbit camera around the board
           const cx = state.position.x + Math.sin(this.orbitYaw) * Math.cos(this.orbitPitch) * this.orbitDist;
           const cy = state.position.y + Math.sin(this.orbitPitch) * this.orbitDist + 0.5;
           const cz = state.position.z + Math.cos(this.orbitYaw) * Math.cos(this.orbitPitch) * this.orbitDist;
@@ -1083,14 +1275,13 @@
           this.camera.lookAt(this.currentLookAt);
           this.camera.rotation.z = 0;
 
-          // Return to follow cam after timeout
           if (this.freelookTimer > this.freelookTimeout) {
             this.freelook = false;
           }
           return;
         }
 
-        // === Follow cam ===
+        // Follow cam
         const rotationMatrix = new THREE.Matrix4();
         rotationMatrix.makeRotationY(state.rotation.yaw);
         
