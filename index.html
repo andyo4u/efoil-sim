@@ -884,7 +884,7 @@
       uniform float time;
       uniform int waveCount;
       uniform vec4 waveData[MAX_WAVES]; // x=amplitude, y=wavelength, z=speed, w=direction
-      uniform vec3 cameraPosition;
+      // cameraPosition is provided by Three.js automatically
       
       varying vec3 vWorldPos;
       varying vec3 vViewDir;
@@ -911,29 +911,30 @@
           float omega = speed * k;
           
           vec2 dir = vec2(cos(direction), sin(direction));
-          float phase = k * dot(dir, position.xz) - omega * time;
+          // PlaneGeometry is in XY, rotated to XZ. position.xy maps to world xz
+          float phase = k * dot(dir, position.xy) - omega * time;
           
           float c = cos(phase);
           float s = sin(phase);
           
-          // Gerstner displacement
-          float steepness = 0.6 / (k * amplitude * float(waveCount));
+          // Gerstner displacement (plane is XY, rotated -PI/2 to XZ)
+          // local x->world x, local y->world z, local z->world y
+          float steepness = 0.6 / (k * amplitude * float(max(waveCount, 1)));
           pos.x -= steepness * amplitude * dir.x * c;
-          pos.z -= steepness * amplitude * dir.y * c;
-          pos.y += amplitude * s;
+          pos.y -= steepness * amplitude * dir.y * c;
+          pos.z += amplitude * s;
           
           // Accumulate derivatives for normals
-          float wa = k * amplitude;
           float kx = k * dir.x;
-          float kz = k * dir.y;
+          float ky = k * dir.y;
           
           tangent.x -= steepness * kx * kx * amplitude * s;
-          tangent.y += kx * amplitude * c;
-          tangent.z -= steepness * kx * kz * amplitude * s;
+          tangent.z += kx * amplitude * c;
+          tangent.y -= steepness * kx * ky * amplitude * s;
           
-          binormal.x -= steepness * kx * kz * amplitude * s;
-          binormal.y += kz * amplitude * c;
-          binormal.z -= steepness * kz * kz * amplitude * s;
+          binormal.x -= steepness * kx * ky * amplitude * s;
+          binormal.z += ky * amplitude * c;
+          binormal.y -= steepness * ky * ky * amplitude * s;
           
           // Foam where waves converge (simplified)
           foam += steepness * 0.5;
@@ -944,7 +945,7 @@
         
         vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
         vViewDir = normalize(cameraPosition - vWorldPos);
-        vWaveHeight = pos.y;
+        vWaveHeight = pos.z;
         vFoam = clamp(foam * 2.0, 0.0, 1.0);
         
         gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -952,6 +953,9 @@
     `;
     
     const fragmentShader = `
+      #extension GL_OES_standard_derivatives : enable
+      precision mediump float;
+      
       uniform vec3 sunPosition;
       uniform vec3 deepColor;
       uniform vec3 shallowColor;
@@ -1062,7 +1066,7 @@
             sunPosition: { value: new THREE.Vector3(0.7, 0.5, 0.3).normalize() },
             deepColor: { value: new THREE.Color(0x001e32) },
             shallowColor: { value: new THREE.Color(0x0066aa) },
-            cameraPosition: { value: this.camera.position }
+            // cameraPosition provided by Three.js automatically
           },
           vertexShader: vertexShader,
           fragmentShader: fragmentShader,
@@ -1110,7 +1114,7 @@
         
         // Update water shader uniforms
         this.waterMaterial.uniforms.time.value = state.time;
-        this.waterMaterial.uniforms.cameraPosition.value.copy(this.camera.position);
+        // cameraPosition uniform is set automatically by Three.js
         
         // Update wave data from swells
         let waveIndex = 0;
